@@ -1,0 +1,109 @@
+pipeline {
+    agent any
+
+    environment {
+        HARBOR_URL = '192.168.0.67:30003' // Harbor registry URL
+        HARBOR_PROJECT = 'ci-cd' // Harbor project name
+        ARGOCD_URL = 'https://192.168.0.67:30963' // ArgoCD server URL
+        IMAGE_NAME = 'sample-app' // Name of the application image
+        IMAGE_TAG = 'latest' // Default image tag
+    }
+
+    stages {
+        stage('Checkout Source Code') {
+            steps {
+                script {
+                    echo "Checking out source code from the repository"
+                }
+                checkout scm
+            }
+        }
+
+        stage('Verify Docker Setup') {
+            steps {
+                script {
+                    echo "Checking if Docker is installed and running"
+                    sh 'docker info'
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    echo "Building Docker image: $HARBOR_URL/$HARBOR_PROJECT/$IMAGE_NAME:$IMAGE_TAG"
+                }
+                sh """
+                docker build -t $HARBOR_URL/$HARBOR_PROJECT/$IMAGE_NAME:$IMAGE_TAG .
+                """
+            }
+        }
+
+        stage('Login to Harbor') {
+            steps {
+                script {
+                    echo "Logging into Harbor registry at $HARBOR_URL"
+                }
+                withDockerRegistry([credentialsId: 'harbor-credentials', url: "https://$HARBOR_URL"]) {
+                    sh 'docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD $HARBOR_URL'
+                }
+            }
+        }
+
+        stage('Push Image to Harbor') {
+            steps {
+                script {
+                    echo "Pushing Docker image to Harbor registry"
+                }
+                sh """
+                docker push $HARBOR_URL/$HARBOR_PROJECT/$IMAGE_NAME:$IMAGE_TAG
+                """
+            }
+        }
+
+        stage('Deploy via ArgoCD') {
+            steps {
+                script {
+                    echo "Triggering deployment via ArgoCD"
+                }
+                sh """
+                argocd app sync $IMAGE_NAME --server $ARGOCD_URL
+                """
+            }
+        }
+
+        stage('Verify Deployment') {
+            steps {
+                script {
+                    echo "Checking deployment status in ArgoCD"
+                }
+                sh """
+                argocd app get $IMAGE_NAME --server $ARGOCD_URL
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            script {
+                echo "Pipeline completed successfully!"
+            }
+        }
+        failure {
+            script {
+                echo "Pipeline failed. Please check the logs for details."
+            }
+        }
+    }
+}
+stage('Clean Up') {
+    steps {
+    script {
+        echo "Cleaning up local Docker images"
+    }
+    sh """
+    docker rmi $HARBOR_URL/$HARBOR_PROJECT/$IMAGE_NAME:$IMAGE_TAG || true
+    """
+    }
+}
